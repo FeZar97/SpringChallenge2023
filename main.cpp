@@ -3,6 +3,9 @@
 #include <memory>
 #include <string>
 #include <array>
+#include <set>
+#include <list>
+#include <map>
 #include <vector>
 
 using namespace std;
@@ -14,7 +17,7 @@ struct Cell
 {
     enum Type
     {
-        Other,
+        Nothing,
         Egg,
         Crystal,
     };
@@ -26,6 +29,17 @@ struct Cell
     int curResources;
     int myAnts;
     int oppAnts;
+
+    void readInitState()
+    {
+        int cellType;
+        cin >> cellType >> initialResources;
+        type = static_cast<Cell::Type>(cellType);
+        for (int nCnt = 0; nCnt < neighArr.size(); nCnt++)
+        {
+            cin >> neighArr[nCnt];
+        }
+    }
 
     void readTurnState()
     {
@@ -88,6 +102,9 @@ struct Field
 
     // syntetic
     std::vector<int> crystalCells;
+    std::vector<int> eggsCells;
+
+    std::vector<std::vector<int>> distancesFromBases;
 
     void init()
     {
@@ -95,19 +112,18 @@ struct Field
         cin.ignore();
 
         cells.resize(numberOfCells);
-        int cellType;
         for (int i = 0; i < numberOfCells; i++)
         {
-            cin >> cellType >> cells[i].initialResources;
-            cells[i].type = static_cast<Cell::Type>(cellType);
-            for (int nCnt = 0; nCnt < cells[i].neighArr.size(); nCnt++)
-            {
-                cin >> cells[i].neighArr[nCnt];
-            }
+            cells[i].readInitState();
 
             if (cells[i].type == Cell::Crystal)
             {
                 crystalCells.push_back(i);
+            }
+
+            if (cells[i].type == Cell::Egg)
+            {
+                eggsCells.push_back(i);
             }
         }
         cin.ignore();
@@ -131,6 +147,61 @@ struct Field
         }
     }
 
+    void makeDfs(int curCellIdx, std::vector<int>& distances)
+    {
+        Cell& curCell = cells[curCellIdx];
+        int nextDist = distances[curCellIdx] + 1;
+        std::list<int> nextDfsNeighbours;
+        for (int neighIdx = 0; neighIdx < curCell.neighArr.size(); neighIdx++)
+        {
+            int curNeighIdx = curCell.neighArr[neighIdx];
+            if (curNeighIdx == -1 // no neigh
+                || distances[curNeighIdx] <= nextDist && distances[curNeighIdx] != -1) // already visited
+            {
+                continue;
+            }
+
+            distances[curNeighIdx] = nextDist;
+            nextDfsNeighbours.push_back(curNeighIdx);
+        }
+
+        for (int neighIdx : nextDfsNeighbours)
+        {
+            makeDfs(neighIdx, distances);
+        }
+    }
+
+    void calcDistances()
+    {
+        distancesFromBases.clear();
+        distancesFromBases.resize(friendlyBases.size());
+
+        for (int friendlyBaseIdx = 0; friendlyBaseIdx < friendlyBases.size(); friendlyBaseIdx++)
+        {
+            distancesFromBases[friendlyBaseIdx] = std::vector<int>(numberOfCells, -1);
+
+            const int curFriendlyBaseIdx = friendlyBases[friendlyBaseIdx];
+            distancesFromBases[friendlyBaseIdx][curFriendlyBaseIdx] = 0;
+            makeDfs(curFriendlyBaseIdx, distancesFromBases[friendlyBaseIdx]);
+
+            std::map<int, std::list<int>> distancesMap;
+            for (int i = 0; i < numberOfCells; i++)
+            {
+                distancesMap[distancesFromBases[friendlyBaseIdx][i]].push_back(i);
+            }
+            std::cerr << "Distances from friendly base " << curFriendlyBaseIdx << ":\n";
+            for (const auto& distPair : distancesMap)
+            {
+                std::cerr << "Distance " << distPair.first << ": [";
+                for (int cellIdx : distPair.second)
+                {
+                    std::cerr << cellIdx << " ";
+                }
+                std::cerr << "]\n";
+            }
+        }
+    }
+
     void readTurnState()
     {
         for (int cellIdx = 0; cellIdx < cells.size(); cellIdx++)
@@ -138,7 +209,6 @@ struct Field
             cells.at(cellIdx).readTurnState();
         }
     }
-
 };
 
 class Game
@@ -177,6 +247,14 @@ private:
         }
     }
 
+    void makeLineForAllEggs()
+    {
+        for (int eggCellIdx = 0; eggCellIdx < field_.eggsCells.size(); eggCellIdx++)
+        {
+            curTurnActions.push_back(std::make_unique<LineAction>(field_.friendlyBases.at(0), field_.eggsCells[eggCellIdx], 1));
+        }
+    }
+
     void makeActions()
     {
         curTurnActions.clear();
@@ -190,6 +268,7 @@ public:
     void init()
     {
         field_.init();
+        field_.calcDistances();
     }
 
     void start()
