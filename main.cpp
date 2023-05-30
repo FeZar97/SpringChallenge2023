@@ -100,11 +100,29 @@ struct Field
     std::vector<int> friendlyBases;
     std::vector<int> opponentBases;
 
+    int maxFieldDist{ 0 };
+
     // syntetic
     std::vector<int> crystalCells;
     std::vector<int> eggsCells;
 
-    std::vector<std::vector<int>> distancesFromBases;
+    // map srcCellIdx -> map < dstCellIdx -> shortestPath >
+    std::vector<std::map<int, std::list<int>>> pathMapVec;
+
+    // map worth of cell to cell
+    // worth = distFromNearestBase * curResources * cellTypeCoef
+    // cellTypeCoef == 2 for Egg and 1 for Crystal
+    std::map<int, int> turnCellWorthMap;
+
+    std::set<int> friendlyCellsOnTurn;
+
+    // map any cell to nearest friendly cell
+    std::map<int, int> nearestFriendlyCellToAnyCells;
+
+    std::map<Cell::Type, int> cellWorthCoef {
+        {Cell::Egg,     10},
+        {Cell::Crystal, 1},
+    };
 
     void init()
     {
@@ -173,40 +191,201 @@ struct Field
 
     void calcDistances()
     {
-        distancesFromBases.clear();
-        distancesFromBases.resize(friendlyBases.size());
-
-        for (int friendlyBaseIdx = 0; friendlyBaseIdx < friendlyBases.size(); friendlyBaseIdx++)
+        pathMapVec.resize(numberOfCells);
+        for (int cellIdx = 0; cellIdx < numberOfCells; cellIdx++)
         {
-            distancesFromBases[friendlyBaseIdx] = std::vector<int>(numberOfCells, -1);
+            pathMapVec[cellIdx] = makePathMap(cellIdx);
 
-            const int curFriendlyBaseIdx = friendlyBases[friendlyBaseIdx];
-            distancesFromBases[friendlyBaseIdx][curFriendlyBaseIdx] = 0;
-            makeDfs(curFriendlyBaseIdx, distancesFromBases[friendlyBaseIdx]);
+            // std::cerr << "---- PATH MAP FROM CELL " << cellIdx << " BUILDED ----\n";
+            // const std::map<int, std::list<int>>& pathMapFromCell = pathMapVec.at(cellIdx);
+            // for (const auto& pathPair : pathMapFromCell)
+            // {
+            //     std::cerr << "Path to " << pathPair.first << ": [";
+            //     for (int cellIdx : pathPair.second)
+            //     {
+            //         std::cerr << cellIdx << " ";
+            //     }
+            //     std::cerr << "]\n";
+            // }
+        }
 
-            std::map<int, std::list<int>> distancesMap;
-            for (int i = 0; i < numberOfCells; i++)
+        // -------------------------------------
+        const std::map<int, std::list<int>>& pathMapFromNullCell = pathMapVec.at(0);
+        int farthestCellFromCenter = 0, maxDist = 0;
+        for (const auto& pathPair : pathMapFromNullCell)
+        {
+            if (pathPair.second.size() > maxDist)
             {
-                distancesMap[distancesFromBases[friendlyBaseIdx][i]].push_back(i);
+                farthestCellFromCenter = pathPair.first;
+                maxDist = pathPair.second.size();
             }
-            std::cerr << "Distances from friendly base " << curFriendlyBaseIdx << ":\n";
-            for (const auto& distPair : distancesMap)
+        }
+        // std::cerr << "farthestCellFromCenter: " << farthestCellFromCenter << ", dist: " << maxDist << std::endl;
+        const std::map<int, std::list<int>>& pathMapFromFarthestCell = pathMapVec.at(farthestCellFromCenter);
+        for (const auto& pathPair : pathMapFromFarthestCell)
+        {
+            if (pathPair.second.size() > maxFieldDist)
             {
-                std::cerr << "Distance " << distPair.first << ": [";
-                for (int cellIdx : distPair.second)
-                {
-                    std::cerr << cellIdx << " ";
-                }
-                std::cerr << "]\n";
+                maxFieldDist = pathPair.second.size();
+            }
+        }
+        // std::cerr << "Max field distance: " << maxFieldDist << std::endl;
+        // -------------------------------------
+
+        // std::cerr << "---- INTRESTING CELLS DIST ----\n";
+        // for (const auto& intrestingCellPair : intrestingDistances)
+        // {
+        //     std::cerr << "Distance from " << intrestingCellPair.first << ": [";
+        //     for (int cellIdx : intrestingCellPair.second)
+        //     {
+        //         std::cerr << cellIdx << " ";
+        //     }
+        //     std::cerr << "]\n";
+        // }
+    }
+
+    void continueBuildPath(int curCell, std::map<int, std::list<int>>& resultPathsMap)
+    {
+        // std::cerr << "continueBuildPath from " << curCell << std::endl;
+        for (int neighCell : cells[curCell].neighArr)
+        {
+            if (neighCell == -1)
+            {
+                continue;
+            }
+
+            // std::cerr << "\tneigh " << neighCell;
+            if (resultPathsMap.count(neighCell) 
+                && resultPathsMap.at(neighCell).size() <= resultPathsMap.at(curCell).size() + 1)
+            {
+                // std::cerr << " already visited " << std::endl;
+                continue;
+            }
+            // std::cerr << " isn't visited, save path " << std::endl;
+            resultPathsMap[neighCell] = resultPathsMap.at(curCell);
+            resultPathsMap[neighCell].push_back(neighCell);
+
+            continueBuildPath(neighCell, resultPathsMap);
+        }
+    }
+
+    std::map<int, std::list<int>> makePathMap(int startCell)
+    {
+        std::map<int, std::list<int>> resultPathsMap;
+        resultPathsMap[startCell] = {};
+
+        continueBuildPath(startCell, resultPathsMap);
+
+        return resultPathsMap;
+    }
+
+    // {
+    //     std::vector<int> distances(numberOfCells, -1);
+    //     distances[startCell] = 0;
+    //     makeDfs(startCell, distances);
+    //     return distances;
+    // }
+
+    void readTurnState()
+    {
+        friendlyCellsOnTurn.clear();
+
+        for (int cellIdx = 0; cellIdx < cells.size(); cellIdx++)
+        {
+            cells.at(cellIdx).readTurnState();
+
+            if (cells.at(cellIdx).myAnts)
+            {
+                friendlyCellsOnTurn.insert(cellIdx);
             }
         }
     }
 
-    void readTurnState()
+    void makeTurnEstimation()
     {
-        for (int cellIdx = 0; cellIdx < cells.size(); cellIdx++)
+        turnCellWorthMap.clear();
+
+        // --- add eggs estimation ---
+        // std::cerr << "add eggs estimation" << std::endl;
+        std::vector<int> newEggCellVec; // vec with updated egg cells
+        for (int eggCell : eggsCells)
         {
-            cells.at(cellIdx).readTurnState();
+            // skip cell without eggs
+            if (cells.at(eggCell).curResources == 0)
+            {
+                continue;
+            }
+            newEggCellVec.push_back(eggCell); // save cell with egg
+
+            // std::cerr << "\tfind nearest friendly cell to egg cell " << eggCell << std::endl;
+            // 
+            // find nearest friendly cell to this egg cell
+            const std::map<int, std::list<int>>& pathMapFromEggCell = pathMapVec.at(eggCell);
+            int distFromNearestCell = maxFieldDist;
+            for (int friendlyCell : friendlyCellsOnTurn)
+            {
+                if (pathMapFromEggCell.at(friendlyCell).size() < distFromNearestCell)
+                {
+                    distFromNearestCell = pathMapFromEggCell.at(friendlyCell).size();
+                    nearestFriendlyCellToAnyCells[eggCell] = friendlyCell;
+                }
+            }
+
+            // std::cerr << "\tcalc egg cell estimation" << std::endl;
+            // 
+            // worth = distFromNearestFriendlyCell * curResources * cellTypeCoef
+            // cellTypeCoef == 2 for Egg and 1 for Crystal
+            turnCellWorthMap[
+                (maxFieldDist - distFromNearestCell) * cells.at(eggCell).curResources * cellWorthCoef[Cell::Type::Egg] * (friendlyCellsOnTurn.count(eggCell) ? 2 : 1)
+            ] = eggCell;
+        }
+        // save update egg vec if it updated
+        if (newEggCellVec.size() != eggsCells.size())
+        {
+            eggsCells = newEggCellVec;
+        }
+
+        // std::cerr << "add crystal estimation" << std::endl;
+        // 
+        // --- add crystal estimation ---
+        std::vector<int> newCrystalCellVec; // vec with updated crystal cells
+        for (int crystalCell : crystalCells)
+        {
+            // skip cell without crystals
+            if (cells.at(crystalCell).curResources == 0)
+            {
+                continue;
+            }
+            newCrystalCellVec.push_back(crystalCell); // save cell with crystal
+
+            // find nearest friendly cell to this crystal cell
+            const std::map<int, std::list<int>>& pathMapFromCrystalCell = pathMapVec.at(crystalCell);
+            int distFromNearestCell = maxFieldDist;
+            for (int friendlyCell : friendlyCellsOnTurn)
+            {
+                if (pathMapFromCrystalCell.at(friendlyCell).size() < distFromNearestCell)
+                {
+                    distFromNearestCell = pathMapFromCrystalCell.at(friendlyCell).size();
+                    nearestFriendlyCellToAnyCells[crystalCell] = friendlyCell;
+                }
+            }
+
+            // worth = distFromNearestFriendlyCell * curResources * cellTypeCoef
+            // cellTypeCoef == 2 for Egg and 1 for Crystal
+            turnCellWorthMap[
+                (maxFieldDist - distFromNearestCell) * cells.at(crystalCell).curResources * cellWorthCoef[Cell::Type::Crystal] * (friendlyCellsOnTurn.count(crystalCell) ? 2 : 1)
+            ] = crystalCell;
+        }
+        // save update crystal vec if it updated
+        if (newCrystalCellVec.size() != crystalCells.size())
+        {
+            crystalCells = newCrystalCellVec;
+        }
+
+        std::cerr << "---- CELLS WORTH ESTIMATION ----\n";
+        for (const auto& estimationCellPair : turnCellWorthMap)
+        {
+            std::cerr << "Estimation of cell " << estimationCellPair.second << " == " << estimationCellPair.first << std::endl;
         }
     }
 };
@@ -220,8 +399,8 @@ private:
     void readTurnState()
     {
         field_.readTurnState();
+        field_.makeTurnEstimation();
     }
-
 
     void printActions()
     {
@@ -255,11 +434,21 @@ private:
         }
     }
 
+    void makeLineForBestCell()
+    {
+        if (field_.turnCellWorthMap.empty())
+        {
+            return;
+        }
+        curTurnActions.push_back(std::make_unique<LineAction>(field_.friendlyBases.at(0), field_.turnCellWorthMap.rbegin()->second, 1));
+    }
+
     void makeActions()
     {
         curTurnActions.clear();
 
-        makeLineForAllCrystalls();
+        // makeLineForAllCrystalls();
+        makeLineForBestCell();
 
         printActions();
     }
