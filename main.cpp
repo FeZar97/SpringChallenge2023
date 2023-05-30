@@ -110,16 +110,18 @@ struct Field
     std::vector<std::map<int, std::list<int>>> pathMapVec;
 
     // map worth of cell to cell
-    std::map<int, int> turnCellWorthMap;
+    std::map<float, std::set<int>> worthToCellSetMap;
 
+    int friendlyAntsOnCurTurn;
     std::set<int> friendlyCellsOnTurn;
 
     // save beacons path between turns
-    std::map<int, std::list<int>> beaconsPrevTurnMap; // map (cell) -> list<cell>
+    std::map<int, std::list<int>> beaconsPathMap; // map (cell) -> list<cell>
+    std::set<int> beaconsCellSet;
 
-    std::map<Cell::Type, int> cellWorthCoef {
-        {Cell::Egg,     10},
-        {Cell::Crystal, 1},
+    std::map<Cell::Type, float> cellWorthCoef {
+        {Cell::Egg,     float(1.75)},
+        {Cell::Crystal, float(1.00)},
     };
 
     void init()
@@ -209,7 +211,7 @@ struct Field
 
             if (resultPathsMap[neighCell].size() > maxFieldDist)
             {
-                maxFieldDist = resultPathsMap[neighCell].size();
+                maxFieldDist = int(resultPathsMap[neighCell].size());
             }
 
             continueBuildPath(neighCell, resultPathsMap);
@@ -226,6 +228,7 @@ struct Field
     void readTurnState()
     {
         friendlyCellsOnTurn.clear();
+        friendlyAntsOnCurTurn = 0;
 
         for (int cellIdx = 0; cellIdx < cells.size(); cellIdx++)
         {
@@ -233,6 +236,7 @@ struct Field
 
             if (cells.at(cellIdx).myAnts)
             {
+                friendlyAntsOnCurTurn += cells.at(cellIdx).myAnts;
                 friendlyCellsOnTurn.insert(cellIdx);
             }
         }
@@ -240,7 +244,7 @@ struct Field
 
     void makeTurnEstimation()
     {
-        turnCellWorthMap.clear();
+        worthToCellSetMap.clear();
 
         // --- add eggs estimation ---
         // std::cerr << "add eggs estimation" << std::endl;
@@ -263,16 +267,14 @@ struct Field
             {
                 if (pathMapFromEggCell.at(friendlyCell).size() < distFromNearestCell)
                 {
-                    distFromNearestCell = pathMapFromEggCell.at(friendlyCell).size();
+                    distFromNearestCell = int(pathMapFromEggCell.at(friendlyCell).size());
                 }
             }
 
-            // std::cerr << "\tcalc egg cell estimation" << std::endl;
-            
-            // worth = distFromNearestFriendlyCell * curResources * cellTypeCoef
-            turnCellWorthMap[
-                (maxFieldDist - distFromNearestCell) * cells.at(eggCell).curResources * cellWorthCoef[Cell::Type::Egg] * (friendlyCellsOnTurn.count(eggCell) ? 2 : 1)
-            ] = eggCell;
+            float distCoef = distFromNearestCell == 0 ? 0.5f : (1 / float(distFromNearestCell));
+            worthToCellSetMap[
+                float(cells.at(eggCell).curResources * cellWorthCoef[Cell::Type::Egg]) * distCoef
+            ].insert(eggCell);
         }
         // save update egg vec if it updated
         if (newEggCellVec.size() != eggsCells.size())
@@ -300,14 +302,14 @@ struct Field
             {
                 if (pathMapFromCrystalCell.at(friendlyCell).size() < distFromNearestCell)
                 {
-                    distFromNearestCell = pathMapFromCrystalCell.at(friendlyCell).size();
+                    distFromNearestCell = int(pathMapFromCrystalCell.at(friendlyCell).size());
                 }
             }
 
-            // worth = distFromNearestFriendlyCell * curResources * cellTypeCoef
-            turnCellWorthMap[
-                (maxFieldDist - distFromNearestCell) * cells.at(crystalCell).curResources * cellWorthCoef[Cell::Type::Crystal] * (friendlyCellsOnTurn.count(crystalCell) ? 2 : 1)
-            ] = crystalCell;
+            float distCoef = distFromNearestCell == 0 ? 0.5f : ( 1 / float(distFromNearestCell * distFromNearestCell));
+            worthToCellSetMap[
+                float(cells.at(crystalCell).curResources * cellWorthCoef[Cell::Type::Crystal]) * distCoef
+            ].insert(crystalCell);
         }
         // save update crystal vec if it updated
         if (newCrystalCellVec.size() != crystalCells.size())
@@ -315,10 +317,14 @@ struct Field
             crystalCells = newCrystalCellVec;
         }
 
-        std::cerr << "---- TURN CELLS WORTH ESTIMATION ----\n";
-        for (auto estimationCellRIter = turnCellWorthMap.rbegin(); estimationCellRIter != turnCellWorthMap.rend(); estimationCellRIter++)
+        for (auto estimationCellRIter = worthToCellSetMap.rbegin(); estimationCellRIter != worthToCellSetMap.rend(); estimationCellRIter++)
         {
-            std::cerr << "Estimation " << estimationCellRIter->first << ": cell " << estimationCellRIter->second << std::endl;
+            std::cerr << "Estimation " << estimationCellRIter->first << " cells: ";
+            for (int cell : estimationCellRIter->second)
+            {
+                std::cerr << cell << ", ";
+            }
+            std::cerr << std::endl;
         }
 
         // update beacons turn map if needed
@@ -327,16 +333,15 @@ struct Field
         {
             needBeaconsForget = false;
 
-            for (const auto& beaconsPairs : beaconsPrevTurnMap)
+            for (const auto& beaconsPairs : beaconsPathMap)
             {
                 int beaconsPathTargetCell = beaconsPairs.first;
 
                 // if prev beacons target disapears, need remove beacons list
                 bool existBeaconTargetInWorthMap = false;
-                for (const auto& beaconsPairs : turnCellWorthMap)
+                for (const auto& worthPair : worthToCellSetMap)
                 {
-                    int worthCell = beaconsPairs.second;
-                    if (worthCell == beaconsPathTargetCell)
+                    if (worthPair.second.count(beaconsPathTargetCell))
                     {
                         existBeaconTargetInWorthMap = true;
                         break;
@@ -347,7 +352,7 @@ struct Field
                     std::cerr << "Forget beacons path to cell " << beaconsPathTargetCell << std::endl;
 
                     needBeaconsForget = true;
-                    beaconsPrevTurnMap.erase(beaconsPathTargetCell);
+                    beaconsPathMap.erase(beaconsPathTargetCell);
                     break;
                 }
             }
@@ -385,33 +390,37 @@ private:
 
     void saveBeaconsForTargets()
     {
-        for (const auto& beaconsTargetPair : field_.beaconsPrevTurnMap)
+        for (const auto& beaconsTargetPair : field_.beaconsPathMap)
         {
-            // beacons from intermediate cell to best estimate cell
             for (int cell : beaconsTargetPair.second)
             {
-                curTurnActions.push_back(
-                    std::make_unique<BeaconAction>(cell, 1)
-                );
+                field_.beaconsCellSet.insert(cell);
             }
         }
     }
 
-    void makeBeaconsForBestCell()
+    void tryMakeNewBeaconPathForBestCell()
     {
-        if (field_.turnCellWorthMap.empty())
+        if (field_.worthToCellSetMap.empty())
         {
             return;
         }
 
         // find cell with max estimate for that not yet exist beacons path
         int cellWithMaxEstimate = -1;
-        for (auto bestEstimateIter = field_.turnCellWorthMap.rbegin(); bestEstimateIter != field_.turnCellWorthMap.rend(); bestEstimateIter++)
+        for (auto bestEstimateIter = field_.worthToCellSetMap.rbegin(); bestEstimateIter != field_.worthToCellSetMap.rend(); bestEstimateIter++)
         {
-            int targetCell = bestEstimateIter->second;
-            if (!field_.beaconsPrevTurnMap.count(targetCell))
+            for (int bestEstimateCell : bestEstimateIter->second)
             {
-                cellWithMaxEstimate = targetCell;
+                if (!field_.beaconsPathMap.count(bestEstimateCell))
+                {
+                    cellWithMaxEstimate = bestEstimateCell;
+                    break;
+                }
+            }
+
+            if (cellWithMaxEstimate != -1)
+            {
                 break;
             }
         }
@@ -424,83 +433,81 @@ private:
 
         std::cerr << "Cell with max estimation: " << cellWithMaxEstimate << std::endl;
 
-        int nearestFriendlyBaseToBestCell;
+        // try find path from nearest friendly cell
+        int nearestFriendlyCellToBestCell;
         int distToCellWithMaxEstimate = field_.maxFieldDist;
-        for (int friendlyBase : field_.friendlyBases)
+        for (int friendlyCell : field_.friendlyCellsOnTurn)
         {
-            if (field_.pathMapVec[friendlyBase][cellWithMaxEstimate].size() < distToCellWithMaxEstimate)
+            if (field_.pathMapVec[friendlyCell][cellWithMaxEstimate].size() < distToCellWithMaxEstimate)
             {
-                nearestFriendlyBaseToBestCell = friendlyBase;
-                distToCellWithMaxEstimate = field_.pathMapVec[friendlyBase][cellWithMaxEstimate].size();
+                nearestFriendlyCellToBestCell = friendlyCell;
+                distToCellWithMaxEstimate = int(field_.pathMapVec[friendlyCell][cellWithMaxEstimate].size());
             }
         }
 
-        std::cerr << "nearestFriendlyBaseToBestCell: " << nearestFriendlyBaseToBestCell << std::endl;
-        std::cerr << "distToCellWithMaxEstimate: " << distToCellWithMaxEstimate << std::endl;
+        // std::cerr << "nearestFriendlyCellToBestCell: " << nearestFriendlyCellToBestCell << std::endl;
+        // std::cerr << "distToCellWithMaxEstimate: " << distToCellWithMaxEstimate << std::endl;
 
         // make beacons path without intermediate cells
         if (distToCellWithMaxEstimate < 2)
         {
-            // nearestFriendlyBaseToBestCell (start cell)
-            field_.beaconsPrevTurnMap[cellWithMaxEstimate].push_back(nearestFriendlyBaseToBestCell);
-            curTurnActions.push_back(
-                std::make_unique<BeaconAction>(nearestFriendlyBaseToBestCell, 1)
-            );
-            // beacons from nearestFriendlyBaseToBestCell to intermediate cell
-            for (int cell : field_.pathMapVec[nearestFriendlyBaseToBestCell][cellWithMaxEstimate])
-            {
-                field_.beaconsPrevTurnMap[cellWithMaxEstimate].push_back(cell);
-                curTurnActions.push_back(
-                    std::make_unique<BeaconAction>(cell, 1)
-                );
-            }
+            // nearestFriendlyCellToBestCell (start cell)
+            field_.beaconsPathMap[cellWithMaxEstimate].push_back(nearestFriendlyCellToBestCell);
+            field_.beaconsCellSet.insert(nearestFriendlyCellToBestCell);
+
+            // cellWithMaxEstimate (end cell)
+            field_.beaconsPathMap[cellWithMaxEstimate].push_back(cellWithMaxEstimate);
+            field_.beaconsCellSet.insert(cellWithMaxEstimate);
+
             return;
         }
 
-        // if dist >= 2 its possible to make OPTIMAL pth over other usefull cells
+        // if dist >= 2 its possible to make OPTIMAL path over other usefull cells
 
         int maxPossiblePathLength = distToCellWithMaxEstimate + distToCellWithMaxEstimate / 2 + 1;
 
         // find all usefull cells in radius (distToCellWithMaxEstimate) without cell (cellWithMaxEstimate)
-        std::map<int, int> radiusCellWorthMap; // map (worth) -> (cell)
-        for (const auto& worthCellPair : field_.turnCellWorthMap)
+        std::map<float, int> radiusCellWorthMap; // map (worth) -> (cell)
+        for (const auto& worthCellSetPair : field_.worthToCellSetMap)
         {
-            // skip best cell
-            if (worthCellPair.second == cellWithMaxEstimate)
+            float curWorthCellEstimation = worthCellSetPair.first;
+            for (int curWorthCell : worthCellSetPair.second)
             {
-                continue;
+                // skip cell with max estimate
+                if (curWorthCell == cellWithMaxEstimate)
+                {
+                    continue;
+                }
+
+                int distFromNearestFriendlyCell = int(field_.pathMapVec[nearestFriendlyCellToBestCell][curWorthCell].size()),
+                    distFromBestCell = int(field_.pathMapVec[cellWithMaxEstimate][curWorthCell].size());
+                int pathOverCellLength = distFromBestCell + distFromBestCell;
+
+                // skip cell with too long dist
+                if (distFromNearestFriendlyCell > distToCellWithMaxEstimate
+                    || distFromBestCell > distToCellWithMaxEstimate
+                    || pathOverCellLength > maxPossiblePathLength)
+                {
+                    continue;
+                }
+
+                float distCoef = pathOverCellLength == 0 ? 0.5f : (1 / float(pathOverCellLength));
+                radiusCellWorthMap[curWorthCellEstimation * distCoef] = curWorthCell;
             }
-
-            int distFromBestBase = field_.pathMapVec[nearestFriendlyBaseToBestCell][worthCellPair.second].size(),
-                distFromBestCell = field_.pathMapVec[cellWithMaxEstimate][worthCellPair.second].size();
-            int pathOverCellLength = distFromBestBase + distFromBestCell;
-
-            // skip cell with to long dist
-            if (distFromBestBase > distToCellWithMaxEstimate
-                || distFromBestCell > distToCellWithMaxEstimate
-                || pathOverCellLength > maxPossiblePathLength)
-            {
-                continue;
-            }
-
-            radiusCellWorthMap[worthCellPair.first * (field_.maxFieldDist - pathOverCellLength)] = worthCellPair.second;
         }
 
         // if no more useful cells in radius make line
         if (radiusCellWorthMap.empty())
         {
-            // nearestFriendlyBaseToBestCell (start cell)
-            field_.beaconsPrevTurnMap[cellWithMaxEstimate].push_back(nearestFriendlyBaseToBestCell);
-            curTurnActions.push_back(
-                std::make_unique<BeaconAction>(nearestFriendlyBaseToBestCell, 1)
-            );
-            // beacons from nearestFriendlyBaseToBestCell to intermediate cell
-            for (int cell : field_.pathMapVec[nearestFriendlyBaseToBestCell][cellWithMaxEstimate])
+            // nearestFriendlyCellToBestCell (start cell)
+            field_.beaconsPathMap[cellWithMaxEstimate].push_back(nearestFriendlyCellToBestCell);
+            field_.beaconsCellSet.insert(nearestFriendlyCellToBestCell);
+
+            // beacons from nearestFriendlyCellToBestCell to intermediate cell
+            for (int cell : field_.pathMapVec[nearestFriendlyCellToBestCell][cellWithMaxEstimate])
             {
-                field_.beaconsPrevTurnMap[cellWithMaxEstimate].push_back(cell);
-                curTurnActions.push_back(
-                    std::make_unique<BeaconAction>(cell, 1)
-                );
+                field_.beaconsPathMap[cellWithMaxEstimate].push_back(cell);
+                field_.beaconsCellSet.insert(cell);
             }
             return;
         }
@@ -508,28 +515,72 @@ private:
         // take max useful cell and make path over this cell with beacons
 
         int intermdiateCell = radiusCellWorthMap.rbegin()->second;
+        std::cerr << "intermdiateCell with max esimation: " << intermdiateCell << std::endl;
 
-        // nearestFriendlyBaseToBestCell (start cell)
-        field_.beaconsPrevTurnMap[cellWithMaxEstimate].push_back(nearestFriendlyBaseToBestCell);
-        curTurnActions.push_back(
-            std::make_unique<BeaconAction>(nearestFriendlyBaseToBestCell, 1)
-        );
+        // nearestFriendlyCellToBestCell (start cell)
+        field_.beaconsPathMap[cellWithMaxEstimate].push_back(nearestFriendlyCellToBestCell);
+        field_.beaconsCellSet.insert(nearestFriendlyCellToBestCell);
 
-        // beacons from nearestFriendlyBaseToBestCell to intermediate cell
-        for (int cell : field_.pathMapVec[nearestFriendlyBaseToBestCell][intermdiateCell])
+        // beacons from nearestFriendlyCellToBestCell to intermediate cell
+        for (int cell : field_.pathMapVec[nearestFriendlyCellToBestCell][intermdiateCell])
         {
-            field_.beaconsPrevTurnMap[cellWithMaxEstimate].push_back(cell);
-            curTurnActions.push_back(
-                std::make_unique<BeaconAction>(cell, 1)
-            );
+            field_.beaconsPathMap[cellWithMaxEstimate].push_back(cell);
+            field_.beaconsCellSet.insert(cell);
         }
 
         // beacons from intermediate cell to best estimate cell
         for (int cell : field_.pathMapVec[intermdiateCell][cellWithMaxEstimate])
         {
-            field_.beaconsPrevTurnMap[cellWithMaxEstimate].push_back(cell);
+            field_.beaconsPathMap[cellWithMaxEstimate].push_back(cell);
+            field_.beaconsCellSet.insert(cell);
+        }
+    }
+
+    void checkBeaconPathToBase()
+    {
+        for (int curFriendlyBase : field_.friendlyBases)
+        {
+            if (field_.beaconsCellSet.count(curFriendlyBase))
+            {
+                continue;
+            }
+
+            // find nearest friendly cell to current friendly base
+            int nearestFriendlyCellToCurFriendlyBase;
+            int nearestDistanceToCurFriendlyBase = field_.maxFieldDist;
+            for (int friendCell : field_.friendlyCellsOnTurn)
+            {
+                int curDist = int(field_.pathMapVec[friendCell][curFriendlyBase].size());
+                if (curDist < nearestDistanceToCurFriendlyBase)
+                {
+                    nearestDistanceToCurFriendlyBase = curDist;
+                    nearestFriendlyCellToCurFriendlyBase = friendCell;
+                }
+            }
+
+            // save beacon cell to friendly base
+            for (int cell : field_.pathMapVec[nearestFriendlyCellToCurFriendlyBase][curFriendlyBase])
+            {
+                field_.beaconsCellSet.insert(cell);
+            }
+        }
+    }
+
+    void setBeacons()
+    {
+        for (int friendlyBase : field_.friendlyBases)
+        {
+            if (!field_.beaconsCellSet.count(friendlyBase))
+            {
+                field_.beaconsCellSet.insert(friendlyBase);
+            }
+        }
+
+        int eachBeaconStrength = field_.friendlyAntsOnCurTurn / int(field_.beaconsCellSet.size()) + 1;
+        for (int beaconCell : field_.beaconsCellSet)
+        {
             curTurnActions.push_back(
-                std::make_unique<BeaconAction>(cell, 1)
+                std::make_unique<BeaconAction>(beaconCell, eachBeaconStrength)
             );
         }
     }
@@ -537,20 +588,25 @@ private:
     void makeActions()
     {
         curTurnActions.clear();
+        field_.beaconsCellSet.clear();
 
         saveBeaconsForTargets();
 
-        makeBeaconsForBestCell();
+        tryMakeNewBeaconPathForBestCell();
 
-        for (const auto& beaconPathPair : field_.beaconsPrevTurnMap)
-        {
-            std::cerr << "Beacon path to cell " << beaconPathPair.first << ": [";
-            for (int cell : beaconPathPair.second)
-            {
-                std::cerr << cell << ", ";
-            }
-            std::cerr << "]\n";
-        }
+        checkBeaconPathToBase();
+
+        setBeacons();
+
+        // for (const auto& beaconPathPair : field_.beaconsPathMap)
+        // {
+        //     std::cerr << "Beacon path to cell " << beaconPathPair.first << ": [";
+        //     for (int cell : beaconPathPair.second)
+        //     {
+        //         std::cerr << cell << ", ";
+        //     }
+        //     std::cerr << "]\n";
+        // }
 
         printActions();
     }
