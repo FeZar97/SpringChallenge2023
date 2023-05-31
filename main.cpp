@@ -120,7 +120,7 @@ struct Field
     std::set<int> beaconsCellSet;
 
     std::map<Cell::Type, float> cellWorthCoef {
-        {Cell::Egg,     float(1.75)},
+        {Cell::Egg,     float(2.50)},
         {Cell::Crystal, float(1.00)},
     };
 
@@ -540,11 +540,6 @@ private:
     {
         for (int curFriendlyBase : field_.friendlyBases)
         {
-            if (field_.beaconsCellSet.count(curFriendlyBase))
-            {
-                continue;
-            }
-
             // find nearest friendly cell to current friendly base
             int nearestFriendlyCellToCurFriendlyBase;
             int nearestDistanceToCurFriendlyBase = field_.maxFieldDist;
@@ -568,14 +563,6 @@ private:
 
     void setBeacons()
     {
-        for (int friendlyBase : field_.friendlyBases)
-        {
-            if (!field_.beaconsCellSet.count(friendlyBase))
-            {
-                field_.beaconsCellSet.insert(friendlyBase);
-            }
-        }
-
         int eachBeaconStrength = field_.friendlyAntsOnCurTurn / int(field_.beaconsCellSet.size()) + 1;
         for (int beaconCell : field_.beaconsCellSet)
         {
