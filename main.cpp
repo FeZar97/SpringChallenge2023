@@ -563,11 +563,17 @@ private:
 
     void setBeacons()
     {
-        int eachBeaconStrength = field_.friendlyAntsOnCurTurn / int(field_.beaconsCellSet.size()) + 1;
+        for (int curFriendlyBase : field_.friendlyBases)
+        {
+            curTurnActions.push_back(
+                std::make_unique<BeaconAction>(curFriendlyBase, 1)
+            );
+        }
+
         for (int beaconCell : field_.beaconsCellSet)
         {
             curTurnActions.push_back(
-                std::make_unique<BeaconAction>(beaconCell, eachBeaconStrength)
+                std::make_unique<BeaconAction>(beaconCell, 1)
             );
         }
     }
@@ -581,7 +587,7 @@ private:
 
         tryMakeNewBeaconPathForBestCell();
 
-        checkBeaconPathToBase();
+        // checkBeaconPathToBase();
 
         setBeacons();
 
