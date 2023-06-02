@@ -30,6 +30,8 @@ struct Cell
     int myAnts;
     int oppAnts;
 
+    int colonyId;
+
     void readInitState()
     {
         int cellType;
@@ -118,6 +120,9 @@ struct Field
     // save beacons path between turns
     std::map<int, std::list<int>> beaconsPathMap; // map (cell) -> list<cell>
     std::set<int> beaconsCellSet;
+
+    // colony id -> set of colonies cells
+    std::map<int, std::set<int>> turnColoniesMap;
 
     std::map<Cell::Type, float> cellWorthCoef {
         {Cell::Egg,     float(2.50)},
@@ -240,6 +245,73 @@ struct Field
                 friendlyCellsOnTurn.insert(cellIdx);
             }
         }
+    }
+
+    void buildColonies()
+    {
+        turnColoniesMap.clear();
+
+        // map cell id -> colony id
+        std::map<int, int> cellInColonies;
+
+        // prepare: enumerate all cell by it own colony
+        for (int cell : friendlyCellsOnTurn)
+        {
+            cells[cell].colonyId = cellInColonies.size() + 1;
+            cellInColonies[cell] = cells[cell].colonyId;
+        }
+
+        // пройтись по всем ячейкам и при нахождении среди соседей минимального значения колонии - распрострянть это значение на всех соседей
+        // при этом не забывать взводить флаг existNewUnions
+        bool existNewUnions = true;
+        while (existNewUnions)
+        {
+            existNewUnions = false;
+
+            for (int cell : friendlyCellsOnTurn)
+            {
+                int minColonyIdInNeigh = cells[cell].colonyId;
+                for (int neighCellIdx : cells[cell].neighArr)
+                {
+                    if (friendlyCellsOnTurn.count(neighCellIdx) && cells[neighCellIdx].colonyId < minColonyIdInNeigh)
+                    {
+                        minColonyIdInNeigh = cells[neighCellIdx].colonyId;
+                    }
+                }
+
+                if (minColonyIdInNeigh != cells[cell].colonyId)
+                {
+                    existNewUnions = true;
+                    cells[cell].colonyId = minColonyIdInNeigh;
+                }
+
+                for (int neighCellIdx : cells[cell].neighArr)
+                {
+                    if (friendlyCellsOnTurn.count(neighCellIdx))
+                    {
+                        cells[neighCellIdx].colonyId = minColonyIdInNeigh;
+                    }
+                }
+            }
+        }
+
+        // теперь все союзные ячейки поделены на колонии
+
+        // сохраняем колонии в мапу колоний
+        for (int cell : friendlyCellsOnTurn)
+        {
+            turnColoniesMap[cells[cell].colonyId].insert(cell);
+        }
+
+        // for (const auto& colonyPair : turnColoniesMap)
+        // {
+        //     std::cerr << "Colony " << colonyPair.first << ": [";
+        //     for (int cell : colonyPair.second)
+        //     {
+        //         std::cerr << cell << ", ";
+        //     }
+        //     std::cerr << ";\n";
+        // }
     }
 
     void makeTurnEstimation()
@@ -369,6 +441,7 @@ private:
     void readTurnState()
     {
         field_.readTurnState();
+        field_.buildColonies();
         field_.makeTurnEstimation();
     }
 
@@ -584,6 +657,12 @@ private:
         field_.beaconsCellSet.clear();
 
         saveBeaconsForTargets();
+
+        // для каждой колонии надо "перестроить колонии": изменить конфигурацию маяков внутри колонии   
+        for (int colonyIdx = 0; colonyIdx < field_.turnColoniesMap.size(); colonyIdx++)
+        {
+
+        }
 
         tryMakeNewBeaconPathForBestCell();
 
