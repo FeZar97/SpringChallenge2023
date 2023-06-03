@@ -104,30 +104,37 @@ struct Field
 
     int maxFieldDist{ 0 };
 
-    // syntetic
-    std::vector<int> crystalCells;
-    std::vector<int> eggsCells;
+    // synthetic
+    std::set<int> crystalCells;
+    std::set<int> eggsCells;
+
+    int totalCrystalsNb{ 0 };
+    int totalEggsNb{ 0 };
+
+    int onTurnMapCrystalsNb{ 0 };
+    int onTurnMapEggsNb{ 0 };
+
+    float crystallEstimation{ 1 };
+    float eggsEstimation{ 1 };
 
     // map srcCellIdx -> map < dstCellIdx -> shortestPath >
-    std::vector<std::map<int, std::list<int>>> pathMapVec;
+    std::vector<std::map<int, std::vector<int>>> pathMapVec;
 
-    // map worth of cell to cell
-    std::map<float, std::set<int>> worthToCellSetMap;
+    // map worth of cell to cell for every colony
+    // colony id -> estimation -> cell
+    std::map<int, std::map<float, std::set<int>>> worthToCellSetColonyMap;
 
     int friendlyAntsOnCurTurn;
     std::set<int> friendlyCellsOnTurn;
 
-    // save beacons path between turns
-    std::map<int, std::list<int>> beaconsPathMap; // map (cell) -> list<cell>
-    std::set<int> beaconsCellSet;
+    // для каждой колонии мапа: cell -> cell, по которым строятся линии биконов
+    std::map<int, std::map<int, int>> coloniesLinesMap;
+
+    // для каждой колонии набор ячеек, в которых должны быть биконы
+    std::map<int, std::set<int>> coloniesBeaconsSetMap;
 
     // colony id -> set of colonies cells
     std::map<int, std::set<int>> turnColoniesMap;
-
-    std::map<Cell::Type, float> cellWorthCoef {
-        {Cell::Egg,     float(2.50)},
-        {Cell::Crystal, float(1.00)},
-    };
 
     void init()
     {
@@ -141,15 +148,20 @@ struct Field
 
             if (cells[i].type == Cell::Crystal)
             {
-                crystalCells.push_back(i);
+                crystalCells.insert(i);
+                totalCrystalsNb += cells[i].initialResources;
+
             }
 
             if (cells[i].type == Cell::Egg)
             {
-                eggsCells.push_back(i);
+                eggsCells.insert(i);
+                totalEggsNb += cells[i].initialResources;
             }
         }
         cin.ignore();
+
+        eggsEstimation = float(totalCrystalsNb) / float(totalEggsNb);
 
         cin >> numberOfBases;
         cin.ignore();
@@ -176,58 +188,49 @@ struct Field
         for (int cellIdx = 0; cellIdx < numberOfCells; cellIdx++)
         {
             makePathMap(cellIdx);
-
-            // std::cerr << "---- PATH MAP FROM CELL " << cellIdx << " BUILDED ----\n";
-            // const std::map<int, std::list<int>>& pathMapFromCell = pathMapVec.at(cellIdx);
-            // for (const auto& pathPair : pathMapFromCell)
-            // {
-            //     std::cerr << "Path to " << pathPair.first << ": [";
-            //     for (int cellIdx : pathPair.second)
-            //     {
-            //         std::cerr << cellIdx << " ";
-            //     }
-            //     std::cerr << "]\n";
-            // }
         }
 
         // std::cerr << "Max field distance: " << maxFieldDist << std::endl;
     }
 
-    void continueBuildPath(int curCell, std::map<int, std::list<int>>& resultPathsMap)
+    void continueBuildPath(std::list<int> nextNeightList, std::map<int, std::vector<int>>& resultPathsMap)
     {
-        // std::cerr << "continueBuildPath from " << curCell << std::endl;
-        for (int neighCell : cells[curCell].neighArr)
+        do
         {
-            if (neighCell == -1)
-            {
-                continue;
-            }
+            std::list<int> cellsToPromoute = nextNeightList;
+            nextNeightList.clear();
 
-            // std::cerr << "\tneigh " << neighCell;
-            if (resultPathsMap.count(neighCell) 
-                && resultPathsMap.at(neighCell).size() <= resultPathsMap.at(curCell).size() + 1)
+            for (int cellToPromoute : cellsToPromoute)
             {
-                // std::cerr << " already visited " << std::endl;
-                continue;
-            }
-            // std::cerr << " isn't visited, save path " << std::endl;
-            resultPathsMap[neighCell] = resultPathsMap.at(curCell);
-            resultPathsMap[neighCell].push_back(neighCell);
+                for (int neighCell : cells[cellToPromoute].neighArr)
+                {
+                    if (neighCell == -1 || resultPathsMap.count(neighCell))
+                    {
+                        // std::cerr << " already visited " << std::endl;
+                        continue;
+                    }
 
-            if (resultPathsMap[neighCell].size() > maxFieldDist)
-            {
-                maxFieldDist = int(resultPathsMap[neighCell].size());
-            }
+                    nextNeightList.push_back(neighCell);
 
-            continueBuildPath(neighCell, resultPathsMap);
-        }
+                    // std::cerr << " isn't visited, save path " << std::endl;
+
+                    resultPathsMap[neighCell] = resultPathsMap[cellToPromoute];
+                    resultPathsMap[neighCell].push_back(neighCell);
+
+                    if (resultPathsMap[neighCell].size() > maxFieldDist)
+                    {
+                        maxFieldDist = resultPathsMap[neighCell].size();
+                    }
+                }
+            }
+        } while (!nextNeightList.empty());
     }
 
     void makePathMap(int startCell)
     {
-        std::map<int, std::list<int>>& resultPathsMap = pathMapVec[startCell];
+        std::map<int, std::vector<int>>& resultPathsMap = pathMapVec[startCell];
         resultPathsMap[startCell] = {};
-        continueBuildPath(startCell, resultPathsMap);
+        continueBuildPath({ startCell }, resultPathsMap);
     }
 
     void readTurnState()
@@ -303,24 +306,56 @@ struct Field
             turnColoniesMap[cells[cell].colonyId].insert(cell);
         }
 
-        // for (const auto& colonyPair : turnColoniesMap)
-        // {
-        //     std::cerr << "Colony " << colonyPair.first << ": [";
-        //     for (int cell : colonyPair.second)
-        //     {
-        //         std::cerr << cell << ", ";
-        //     }
-        //     std::cerr << ";\n";
-        // }
+        for (const auto& colonyPair : turnColoniesMap)
+        {
+            std::cerr << "Colony " << colonyPair.first << ": [";
+            for (int cell : colonyPair.second)
+            {
+                std::cerr << cell;
+                if (cell != *std::prev(colonyPair.second.end()))
+                {
+                    std::cerr << ", ";
+                }
+            }
+            std::cerr << "]\n";
+        }
+
+        // удаление "вырожденных" колоний
+        // колония считается вырожденной, если в ней нет ни одной союзной базы
+        int lastCheckedColonyId = -1;
+        auto colonyToCheckIter = turnColoniesMap.upper_bound(lastCheckedColonyId);
+        while (colonyToCheckIter != turnColoniesMap.end())
+        {
+            lastCheckedColonyId = colonyToCheckIter->first;
+            // std::cerr << "Check Colony " << lastCheckedColonyId << " degeneracy..." << std::endl;
+
+            bool isColonyWithFriendlyBase = false;
+            for (int friendlyBase : friendlyBases)
+            {
+                if (colonyToCheckIter->second.count(friendlyBase))
+                {
+                    isColonyWithFriendlyBase = true;
+                    break;
+                }
+            }
+
+            if (!isColonyWithFriendlyBase)
+            {
+                // std::cerr << "Colony " << lastCheckedColonyId << " hasn't friendly base and is degenrated, forget it" << std::endl;
+                turnColoniesMap.erase(lastCheckedColonyId);
+            }
+            colonyToCheckIter = turnColoniesMap.upper_bound(lastCheckedColonyId);
+        }
     }
 
     void makeTurnEstimation()
     {
-        worthToCellSetMap.clear();
+        worthToCellSetColonyMap.clear();
+        onTurnMapCrystalsNb = 0;
+        onTurnMapEggsNb = 0;
 
-        // --- add eggs estimation ---
-        // std::cerr << "add eggs estimation" << std::endl;
-        std::vector<int> newEggCellVec; // vec with updated egg cells
+// если какие то яйца пропали с карты, то про них надо забыть
+        std::set<int> newEggCellSet; // set with updated egg cells
         for (int eggCell : eggsCells)
         {
             // skip cell without eggs
@@ -328,36 +363,17 @@ struct Field
             {
                 continue;
             }
-            newEggCellVec.push_back(eggCell); // save cell with egg
-
-            // std::cerr << "\tfind nearest friendly cell to egg cell " << eggCell << std::endl;
-            
-            // find nearest friendly cell to this egg cell
-            const std::map<int, std::list<int>>& pathMapFromEggCell = pathMapVec.at(eggCell);
-            int distFromNearestCell = maxFieldDist;
-            for (int friendlyCell : friendlyCellsOnTurn)
-            {
-                if (pathMapFromEggCell.at(friendlyCell).size() < distFromNearestCell)
-                {
-                    distFromNearestCell = int(pathMapFromEggCell.at(friendlyCell).size());
-                }
-            }
-
-            float distCoef = distFromNearestCell == 0 ? 0.5f : (1 / float(distFromNearestCell));
-            worthToCellSetMap[
-                float(cells.at(eggCell).curResources * cellWorthCoef[Cell::Type::Egg]) * distCoef
-            ].insert(eggCell);
+            newEggCellSet.insert(eggCell); // save cell with egg
+            onTurnMapEggsNb += cells.at(eggCell).curResources;
         }
         // save update egg vec if it updated
-        if (newEggCellVec.size() != eggsCells.size())
+        if (newEggCellSet.size() != eggsCells.size())
         {
-            eggsCells = newEggCellVec;
+            eggsCells = newEggCellSet;
         }
 
-        // std::cerr << "add crystal estimation" << std::endl;
-        // 
-        // --- add crystal estimation ---
-        std::vector<int> newCrystalCellVec; // vec with updated crystal cells
+// если какие то кристаллы пропали с карты, то про них надо забыть
+        std::set<int> newCrystalCellSet; // set with updated crystal cells
         for (int crystalCell : crystalCells)
         {
             // skip cell without crystals
@@ -365,69 +381,120 @@ struct Field
             {
                 continue;
             }
-            newCrystalCellVec.push_back(crystalCell); // save cell with crystal
-
-            // find nearest friendly cell to this crystal cell
-            const std::map<int, std::list<int>>& pathMapFromCrystalCell = pathMapVec.at(crystalCell);
-            int distFromNearestCell = maxFieldDist;
-            for (int friendlyCell : friendlyCellsOnTurn)
-            {
-                if (pathMapFromCrystalCell.at(friendlyCell).size() < distFromNearestCell)
-                {
-                    distFromNearestCell = int(pathMapFromCrystalCell.at(friendlyCell).size());
-                }
-            }
-
-            float distCoef = distFromNearestCell == 0 ? 0.5f : ( 1 / float(distFromNearestCell * distFromNearestCell));
-            worthToCellSetMap[
-                float(cells.at(crystalCell).curResources * cellWorthCoef[Cell::Type::Crystal]) * distCoef
-            ].insert(crystalCell);
+            newCrystalCellSet.insert(crystalCell); // save cell with crystal
+            onTurnMapCrystalsNb += cells.at(crystalCell).curResources;
         }
         // save update crystal vec if it updated
-        if (newCrystalCellVec.size() != crystalCells.size())
+        if (newCrystalCellSet.size() != crystalCells.size())
         {
-            crystalCells = newCrystalCellVec;
+            crystalCells = newCrystalCellSet;
         }
 
-        for (auto estimationCellRIter = worthToCellSetMap.rbegin(); estimationCellRIter != worthToCellSetMap.rend(); estimationCellRIter++)
+// изменение оценки кристаллов
+// чем меньше кристаллов на карте осталось - тем они ценнее
+        crystallEstimation = float(totalCrystalsNb) / float(onTurnMapCrystalsNb);
+
+// если текущее кол-во муравьев позволяет собрать половину кристалов от начального
+// то кристаллы собирать становится ГОРАЗДО выгоднее
+        if (friendlyAntsOnCurTurn > totalCrystalsNb / 2)
         {
-            std::cerr << "Estimation " << estimationCellRIter->first << " cells: ";
-            for (int cell : estimationCellRIter->second)
-            {
-                std::cerr << cell << ", ";
-            }
-            std::cerr << std::endl;
+            crystallEstimation *= 10;
         }
 
-        // update beacons turn map if needed
-        bool needBeaconsForget = true;
-        while (needBeaconsForget)
+// оценка стоимости ячеек для каждой колонии
+        for (const auto& colonyWorthMapPair : turnColoniesMap)
         {
-            needBeaconsForget = false;
+            const int colonyId = colonyWorthMapPair.first;
 
-            for (const auto& beaconsPairs : beaconsPathMap)
+            // построение обратной мапы: cell -> worth
+            std::map<int, float> curColonyWorthMap;
+
+    // estimate egg cells
+            // std::cerr << "\tEstimate egg cells" << std::endl;
+            for (int eggCell : eggsCells)
             {
-                int beaconsPathTargetCell = beaconsPairs.first;
+                const std::map<int, std::vector<int>>& pathMapFromEggCell = pathMapVec.at(eggCell);
 
-                // if prev beacons target disapears, need remove beacons list
-                bool existBeaconTargetInWorthMap = false;
-                for (const auto& worthPair : worthToCellSetMap)
+            // find nearest friendly cell IN THIS COLONY to this egg cell
+                int distFromNearestColonyCell = maxFieldDist;
+
+                const std::set<int>& friendlyCellsInColonySet = colonyWorthMapPair.second;
+                for (int friendlyColonyCell : friendlyCellsInColonySet)
                 {
-                    if (worthPair.second.count(beaconsPathTargetCell))
+                    const std::vector<int>& shortestPathListFromEggToThisCell = pathMapFromEggCell.at(friendlyColonyCell);
+                    if (shortestPathListFromEggToThisCell.size() < distFromNearestColonyCell)
                     {
-                        existBeaconTargetInWorthMap = true;
-                        break;
+                        distFromNearestColonyCell = int(shortestPathListFromEggToThisCell.size());
                     }
                 }
-                if (!existBeaconTargetInWorthMap)
-                {
-                    std::cerr << "Forget beacons path to cell " << beaconsPathTargetCell << std::endl;
 
-                    needBeaconsForget = true;
-                    beaconsPathMap.erase(beaconsPathTargetCell);
-                    break;
-                }
+                float distCoef = distFromNearestColonyCell == 0 ? 2 : (1 / float(distFromNearestColonyCell));
+                curColonyWorthMap[eggCell] = float(cells.at(eggCell).curResources * eggsEstimation) * distCoef;
             }
+            
+    // estimate crystall cells
+            // std::cerr << "\tEstimate crystal cells" << std::endl;
+            for (int crystalCell : crystalCells)
+            {
+                const std::map<int, std::vector<int>>& pathMapFromCrystalCell = pathMapVec.at(crystalCell);
+
+                // find nearest friendly cell IN THIS COLONY to this crystal cell
+                int distFromNearestColonyCell = maxFieldDist;
+
+                const std::set<int>& friendlyCellsInColonySet = colonyWorthMapPair.second;
+                for (int friendlyColonyCell : friendlyCellsInColonySet)
+                {
+                    const std::vector<int>& shortestPathListFromCrystalToThisCell = pathMapFromCrystalCell.at(friendlyColonyCell);
+                    if (shortestPathListFromCrystalToThisCell.size() < distFromNearestColonyCell)
+                    {
+                        distFromNearestColonyCell = int(shortestPathListFromCrystalToThisCell.size());
+                    }
+                }
+
+                float distCoef = distFromNearestColonyCell == 0 ? 0.5f : (1 / float(distFromNearestColonyCell));
+                curColonyWorthMap[crystalCell] = float(cells.at(crystalCell).curResources * crystallEstimation) * distCoef;
+            }
+
+    // к оценке каждой ячейки добавляется сумма оценок соседей и записывается в мапу с оценками для текущей колонии
+            // пробегаемся по локальной мапе curColonyWorthMap и считаем ПОЛНУЮ оценку отдельно
+            for (const auto& worthPair : curColonyWorthMap)
+            {
+                float curCellFullWorth = worthPair.second;
+                // добавляем оценки соседей
+                for (int neight : cells[worthPair.first].neighArr)
+                {
+                    if (neight == -1)
+                    {
+                        continue;
+                    }
+                    if (curColonyWorthMap.count(neight))
+                    {
+                        curCellFullWorth += curColonyWorthMap[neight] * 0.8;
+                    }
+                }
+
+                // записываем сумму в глобальную мапу
+                worthToCellSetColonyMap[colonyId][curCellFullWorth].insert(worthPair.first);
+            }
+
+    // print estimation
+            std::cerr << "Estimation for colony " + std::to_string(colonyId) + ": ";
+            for (auto estimationCellRIter = worthToCellSetColonyMap[colonyId].rbegin(); 
+                estimationCellRIter != worthToCellSetColonyMap[colonyId].rend();
+                estimationCellRIter++)
+            {
+                std::cerr << estimationCellRIter->first << " (";
+                for (int cell : estimationCellRIter->second)
+                {
+                    std::cerr << cell;
+                    if (cell != *std::prev(estimationCellRIter->second.end()))
+                    {
+                        std::cerr << ", ";
+                    }
+                }
+                std::cerr << "), ";
+            }
+            std::cerr << std::endl;
         }
     }
 };
@@ -461,224 +528,370 @@ private:
         cout << endl;
     }
 
-    void saveBeaconsForTargets()
+    void saveActualLinesInColonies()
     {
-        for (const auto& beaconsTargetPair : field_.beaconsPathMap)
-        {
-            for (int cell : beaconsTargetPair.second)
-            {
-                field_.beaconsCellSet.insert(cell);
-            }
-        }
-    }
+        // std::cerr << "begin saveActualLinesInColonies" << std::endl;
 
-    void tryMakeNewBeaconPathForBestCell()
-    {
-        if (field_.worthToCellSetMap.empty())
-        {
-            return;
-        }
+        // в каждой колонии линии строятся между опорными точками - клетками с ресурсами, которые представляют какую-либо ценность
+        // первоначально линия сохраняется от базы до ближайшей полезной точки
+        // после того, как убдет добавлена основная линия, можно достравитьва линии от/до остальных полезных клетко
 
-        // find cell with max estimate for that not yet exist beacons path
-        int cellWithMaxEstimate = -1;
-        for (auto bestEstimateIter = field_.worthToCellSetMap.rbegin(); bestEstimateIter != field_.worthToCellSetMap.rend(); bestEstimateIter++)
+        for (const auto& colonyPair : field_.turnColoniesMap)
         {
-            for (int bestEstimateCell : bestEstimateIter->second)
+            const int colonyId = colonyPair.first;
+            const std::set<int> colonyCells = colonyPair.second;
+
+        // определение союзной базы в данной колонии
+            int friendlyColonyBase = -1;
+            for (int friendlyBase : field_.friendlyBases)
             {
-                if (!field_.beaconsPathMap.count(bestEstimateCell))
+                if (colonyCells.count(friendlyBase))
                 {
-                    cellWithMaxEstimate = bestEstimateCell;
+                    friendlyColonyBase = friendlyBase;
                     break;
                 }
             }
 
-            if (cellWithMaxEstimate != -1)
+            // std::cerr << "friendly base in colony " << colonyId << ": " << friendlyColonyBase << std::endl;
+
+            // если союзная база не нашлась, то это означает, что данная колония вырожденная и надо эту колонию слить с одной из полноценных колоний
+            if (friendlyColonyBase == -1)
             {
-                break;
+                // std::cerr << "FIXME saveActualLinesInColonies" << std::endl;
+                continue;
             }
-        }
 
-        // if cellWithMaxEstimate not found - return
-        if (cellWithMaxEstimate == -1)
-        {
-            return;
-        }
+            // набор задействованных опорных точек
+            // состоит из союзной базы и всех ячеек колонии, представляющих какую-либо ценност
+            std::set<int> colonyReferenceCells{ friendlyColonyBase };
 
-        std::cerr << "Cell with max estimation: " << cellWithMaxEstimate << std::endl;
+            // набор НЕ использованных опорных точек колони
+            std::set<int> freeReferenceCells;
 
-        // try find path from nearest friendly cell
-        int nearestFriendlyCellToBestCell;
-        int distToCellWithMaxEstimate = field_.maxFieldDist;
-        for (int friendlyCell : field_.friendlyCellsOnTurn)
-        {
-            if (field_.pathMapVec[friendlyCell][cellWithMaxEstimate].size() < distToCellWithMaxEstimate)
+            // все ячейки, задействованные в построении линий
+            std::set<int> allCellsUsedInLines;
+
+            // наполняем набор freeReferenceCells
+            for (int colonyCell : colonyCells)
             {
-                nearestFriendlyCellToBestCell = friendlyCell;
-                distToCellWithMaxEstimate = int(field_.pathMapVec[friendlyCell][cellWithMaxEstimate].size());
-            }
-        }
-
-        // std::cerr << "nearestFriendlyCellToBestCell: " << nearestFriendlyCellToBestCell << std::endl;
-        // std::cerr << "distToCellWithMaxEstimate: " << distToCellWithMaxEstimate << std::endl;
-
-        // make beacons path without intermediate cells
-        if (distToCellWithMaxEstimate < 2)
-        {
-            // nearestFriendlyCellToBestCell (start cell)
-            field_.beaconsPathMap[cellWithMaxEstimate].push_back(nearestFriendlyCellToBestCell);
-            field_.beaconsCellSet.insert(nearestFriendlyCellToBestCell);
-
-            // cellWithMaxEstimate (end cell)
-            field_.beaconsPathMap[cellWithMaxEstimate].push_back(cellWithMaxEstimate);
-            field_.beaconsCellSet.insert(cellWithMaxEstimate);
-
-            return;
-        }
-
-        // if dist >= 2 its possible to make OPTIMAL path over other usefull cells
-
-        int maxPossiblePathLength = distToCellWithMaxEstimate + distToCellWithMaxEstimate / 2 + 1;
-
-        // find all usefull cells in radius (distToCellWithMaxEstimate) without cell (cellWithMaxEstimate)
-        std::map<float, int> radiusCellWorthMap; // map (worth) -> (cell)
-        for (const auto& worthCellSetPair : field_.worthToCellSetMap)
-        {
-            float curWorthCellEstimation = worthCellSetPair.first;
-            for (int curWorthCell : worthCellSetPair.second)
-            {
-                // skip cell with max estimate
-                if (curWorthCell == cellWithMaxEstimate)
+                // игнорим пустые ячейки
+                if (!field_.eggsCells.count(colonyCell) && !field_.crystalCells.count(colonyCell))
                 {
                     continue;
                 }
 
-                int distFromNearestFriendlyCell = int(field_.pathMapVec[nearestFriendlyCellToBestCell][curWorthCell].size()),
-                    distFromBestCell = int(field_.pathMapVec[cellWithMaxEstimate][curWorthCell].size());
-                int pathOverCellLength = distFromBestCell + distFromBestCell;
+                freeReferenceCells.insert(colonyCell);
+            }
 
-                // skip cell with too long dist
-                if (distFromNearestFriendlyCell > distToCellWithMaxEstimate
-                    || distFromBestCell > distToCellWithMaxEstimate
-                    || pathOverCellLength > maxPossiblePathLength)
+        // после определния союзной базы в колонии, надо найти ближайшую к этой базе опорную точку среди freeReferenceCells
+            int nearestResourceColonyCellToFriendBase = -1;
+            int minDist = field_.maxFieldDist;
+            for (int colonyCell : freeReferenceCells)
+            {
+                int curDist = field_.pathMapVec[colonyCell][friendlyColonyBase].size();
+                if (curDist < minDist)
                 {
-                    continue;
+                    minDist = curDist;
+                    nearestResourceColonyCellToFriendBase = colonyCell;
+                }
+            }
+
+            // std::cerr << "Nearest Colony Cell with resources To Friendly Base base in colony " << colonyId << ": " << nearestResourceColonyCellToFriendBase << std::endl;
+
+            if (nearestResourceColonyCellToFriendBase == -1)
+            {
+                field_.coloniesBeaconsSetMap[colonyId] = { friendlyColonyBase };
+                continue;
+            }
+
+            // сохраняем первую опорную линию
+            field_.coloniesLinesMap[colonyId][friendlyColonyBase] = nearestResourceColonyCellToFriendBase;
+
+            // перераспределние опорных точек
+            freeReferenceCells.erase(nearestResourceColonyCellToFriendBase);
+            colonyReferenceCells.insert(nearestResourceColonyCellToFriendBase);
+
+            // наполнение allCellsUsedInLines
+            allCellsUsedInLines.insert(friendlyColonyBase);
+            for (int cell : field_.pathMapVec[friendlyColonyBase][nearestResourceColonyCellToFriendBase])
+            {
+                allCellsUsedInLines.insert(cell);
+            }
+
+        // пока есть свободные опорные точки
+        // пытаемся найти такую опорную точку, которая будет наиближайшей к построенным линиям внутри колонии
+            while (freeReferenceCells.size())
+            {
+                int nextUsedReferenceCell = -1;
+                int nearestCellInAllCellsUsedInLines = -1;
+                int minDistFromRefernceCell = field_.maxFieldDist;
+
+                for (int colonyCell : freeReferenceCells)
+                {
+                    for (int linesCell : allCellsUsedInLines)
+                    {
+                        int curDist = field_.pathMapVec[colonyCell][linesCell].size();
+                        if (curDist < minDistFromRefernceCell)
+                        {
+                            minDist = curDist;
+                            nextUsedReferenceCell = colonyCell;
+                            nearestCellInAllCellsUsedInLines = linesCell;
+                        }
+
+                        // ускоряем итерирование
+                        if (minDistFromRefernceCell <= 1)
+                        {
+                            break;
+                        }
+                    }
+
+                    // ускоряем итерирование
+                    if (minDistFromRefernceCell <= 1)
+                    {
+                        break;
+                    }
                 }
 
-                float distCoef = pathOverCellLength == 0 ? 0.5f : (1 / float(pathOverCellLength));
-                radiusCellWorthMap[curWorthCellEstimation * distCoef] = curWorthCell;
+                // если что то пошло не так
+                if (nextUsedReferenceCell == -1 || nearestCellInAllCellsUsedInLines == -1)
+                {
+                    break;
+                }
+
+
+             // сохраняем опорную линию
+                field_.coloniesLinesMap[colonyId][nextUsedReferenceCell] = nearestCellInAllCellsUsedInLines;
+
+                // перераспределние опорных точек
+                freeReferenceCells.erase(nextUsedReferenceCell);
+                colonyReferenceCells.insert(nextUsedReferenceCell);
+
+                // наполнение allCellsUsedInLines
+                for (int cell : field_.pathMapVec[nearestCellInAllCellsUsedInLines][nextUsedReferenceCell])
+                {
+                    allCellsUsedInLines.insert(cell);
+                }
             }
+
+        // сохраняем полученный набор клеток для совершения хода и выставления бикново
+            field_.coloniesBeaconsSetMap[colonyId] = allCellsUsedInLines;
         }
 
-        // if no more useful cells in radius make line
-        if (radiusCellWorthMap.empty())
-        {
-            // nearestFriendlyCellToBestCell (start cell)
-            field_.beaconsPathMap[cellWithMaxEstimate].push_back(nearestFriendlyCellToBestCell);
-            field_.beaconsCellSet.insert(nearestFriendlyCellToBestCell);
-
-            // beacons from nearestFriendlyCellToBestCell to intermediate cell
-            for (int cell : field_.pathMapVec[nearestFriendlyCellToBestCell][cellWithMaxEstimate])
-            {
-                field_.beaconsPathMap[cellWithMaxEstimate].push_back(cell);
-                field_.beaconsCellSet.insert(cell);
-            }
-            return;
-        }
-
-        // take max useful cell and make path over this cell with beacons
-
-        int intermdiateCell = radiusCellWorthMap.rbegin()->second;
-        std::cerr << "intermdiateCell with max esimation: " << intermdiateCell << std::endl;
-
-        // nearestFriendlyCellToBestCell (start cell)
-        field_.beaconsPathMap[cellWithMaxEstimate].push_back(nearestFriendlyCellToBestCell);
-        field_.beaconsCellSet.insert(nearestFriendlyCellToBestCell);
-
-        // beacons from nearestFriendlyCellToBestCell to intermediate cell
-        for (int cell : field_.pathMapVec[nearestFriendlyCellToBestCell][intermdiateCell])
-        {
-            field_.beaconsPathMap[cellWithMaxEstimate].push_back(cell);
-            field_.beaconsCellSet.insert(cell);
-        }
-
-        // beacons from intermediate cell to best estimate cell
-        for (int cell : field_.pathMapVec[intermdiateCell][cellWithMaxEstimate])
-        {
-            field_.beaconsPathMap[cellWithMaxEstimate].push_back(cell);
-            field_.beaconsCellSet.insert(cell);
-        }
+        // std::cerr << "end saveActualLinesInColonies" << std::endl;
     }
 
-    void checkBeaconPathToBase()
+    void tryMakeNewLinesInColonies()
     {
-        for (int curFriendlyBase : field_.friendlyBases)
+        // std::cerr << "begin tryMakeNewLinesInColonies" << std::endl;
+
+        // для каждой колонии надо "перестроить колонии": изменить конфигурацию маяков внутри колонии и, опционально, расширить зону колонии
+        for (const auto& colonyPair : field_.turnColoniesMap)
         {
-            // find nearest friendly cell to current friendly base
-            int nearestFriendlyCellToCurFriendlyBase;
-            int nearestDistanceToCurFriendlyBase = field_.maxFieldDist;
-            for (int friendCell : field_.friendlyCellsOnTurn)
+            const int colonyId = colonyPair.first;
+            const std::set<int>& curColonyCellSet = colonyPair.second;
+            
+            // если список потенциальных таргетов пустой - делать нечего
+            if (field_.worthToCellSetColonyMap[colonyId].empty())
             {
-                int curDist = int(field_.pathMapVec[friendCell][curFriendlyBase].size());
-                if (curDist < nearestDistanceToCurFriendlyBase)
+                continue;
+            }
+
+            // новые пути строятся до всех клеток, оценка которых превышает некоторый порог
+            float colonyEstimationThreshold = -1.f;
+            for (auto bestEstimateIter = field_.worthToCellSetColonyMap[colonyId].rbegin(); bestEstimateIter != field_.worthToCellSetColonyMap[colonyId].rend(); bestEstimateIter++)
+            {
+                // набор ячеек с текущим эстимейтом
+                const std::set<int>& cellsSetWithCurEstimation = bestEstimateIter->second;
+
+                for (int bestEstimateCell : cellsSetWithCurEstimation)
                 {
-                    nearestDistanceToCurFriendlyBase = curDist;
-                    nearestFriendlyCellToCurFriendlyBase = friendCell;
+                    // если текущей ячейки нет в мапе с таргетами для колонии, то используем эту оценку как максимальную
+                    if (!field_.coloniesBeaconsSetMap[colonyId].count(bestEstimateCell))
+                    {
+                        colonyEstimationThreshold = bestEstimateIter->first * 0.6;
+                        break;
+                    }
+                }
+
+                // if threshold found
+                if (colonyEstimationThreshold > 0)
+                {
+                    break;
                 }
             }
 
-            // save beacon cell to friendly base
-            for (int cell : field_.pathMapVec[nearestFriendlyCellToCurFriendlyBase][curFriendlyBase])
+            std::cerr << "Estimation threshold for colony " + std::to_string(colonyId) + ": " << colonyEstimationThreshold << std::endl;
+
+            bool existCellWithHighEstimate = true;
+            while (existCellWithHighEstimate)
             {
-                field_.beaconsCellSet.insert(cell);
+                existCellWithHighEstimate = false;
+
+                float curEstimation = -1.f;
+
+                // find cell with max estimate for that not yet exist in field_.coloniesBeaconsSetMap[colonyId]
+                int cellWithMaxEstimate = -1;
+                for (auto bestEstimateIter = field_.worthToCellSetColonyMap[colonyId].rbegin(); bestEstimateIter != field_.worthToCellSetColonyMap[colonyId].rend(); bestEstimateIter++)
+                {
+                    if (bestEstimateIter->first < colonyEstimationThreshold)
+                    {
+                        break;
+                    }
+
+                    // набор ячеек с текущим эстимейтом
+                    const std::set<int>& cellsSetWithCurEstimation = bestEstimateIter->second;
+
+                    for (int bestEstimateCell : cellsSetWithCurEstimation)
+                    {
+                        // если текущей ячейки нет в мапе с таргетами дял колонии, то сохраняем эту ячейку как целевую для колонии
+                        if (!field_.coloniesBeaconsSetMap[colonyId].count(bestEstimateCell))
+                        {
+                            cellWithMaxEstimate = bestEstimateCell;
+                            curEstimation = bestEstimateIter->first;
+                            break;
+                        }
+                    }
+
+                    if (cellWithMaxEstimate != -1)
+                    {
+                        break;
+                    }
+                }
+
+                // if cellWithMaxEstimate not found - continue
+                if (cellWithMaxEstimate == -1)
+                {
+                    break;
+                }
+
+                std::cerr << "Next cell with high estimation for colony " + std::to_string(colonyId) + ": " << cellWithMaxEstimate << ", estimation " << curEstimation << std::endl;
+
+                existCellWithHighEstimate = true;
+
+                // в текущей колонии надо найти ячейку, ближайшую к ячейке с макс оценкой
+                // поиск ячейки производится среди field_.coloniesBeaconsSetMap[colonyId]
+
+                int distToCellWithMaxEstimate = field_.maxFieldDist;
+                int nearestColonyCellToBestCell = -1;
+                for (int beaconCell : field_.coloniesBeaconsSetMap[colonyId])
+                {
+                    int curDist = field_.pathMapVec[beaconCell][cellWithMaxEstimate].size();
+                    if (curDist < distToCellWithMaxEstimate)
+                    {
+                        distToCellWithMaxEstimate = curDist;
+                        nearestColonyCellToBestCell = beaconCell;
+                    }
+                }
+
+                // std::cerr << "\tdistToCellWithMaxEstimate: " << distToCellWithMaxEstimate << std::endl;
+                // std::cerr << "\tnearestColonyCellToBestCell: " << nearestColonyCellToBestCell << std::endl;
+
+                // make beacons path without intermediate cells
+                if (distToCellWithMaxEstimate < 2)
+                {
+                    field_.coloniesBeaconsSetMap[colonyId].insert(cellWithMaxEstimate);
+                    continue;
+                }
+
+                // if dist >= 2 its possible to make OPTIMAL path over other usefull cells
+
+                int maxPossiblePathLength = distToCellWithMaxEstimate + distToCellWithMaxEstimate / 2 + 1;
+
+                // find all usefull cells in radius (distToCellWithMaxEstimate) without cell (cellWithMaxEstimate)
+                std::map<float, int> radiusCellWorthMap; // map (worth) -> (cell)
+                // бежим по мапе с оценками ячеек для данной колонии
+                // ищем ячейки, которые по пути к наилучшей ячейке
+                // и строим оценку для таких ячеек в мапе radiusCellWorthMap
+                for (const auto& worthCellSetPair : field_.worthToCellSetColonyMap[colonyId])
+                {
+                    float curWorthCellEstimation = worthCellSetPair.first;
+                    for (int curWorthCell : worthCellSetPair.second)
+                    {
+                        // skip cell with max estimate
+                        if (curWorthCell == cellWithMaxEstimate)
+                        {
+                            continue;
+                        }
+
+                        int distFromNearestColonyCell = int(field_.pathMapVec[nearestColonyCellToBestCell][curWorthCell].size()),
+                            distFromBestCell = int(field_.pathMapVec[cellWithMaxEstimate][curWorthCell].size());
+                        int pathOverCellLength = distFromBestCell + distFromBestCell;
+
+                        // skip cell with too long dist
+                        if (distFromNearestColonyCell > distToCellWithMaxEstimate
+                            || distFromBestCell > distToCellWithMaxEstimate
+                            || pathOverCellLength > maxPossiblePathLength)
+                        {
+                            continue;
+                        }
+
+                        float distCoef = pathOverCellLength == 0 ? 2 : (1 / float(pathOverCellLength));
+                        radiusCellWorthMap[curWorthCellEstimation * distCoef] = curWorthCell;
+                    }
+                }
+
+                // if no more useful cells in radius make direct line to nearest colony cell
+                if (radiusCellWorthMap.empty())
+                {
+                    // наполнение allCellsUsedInLines
+                    for (int cell : field_.pathMapVec[nearestColonyCellToBestCell][cellWithMaxEstimate])
+                    {
+                        field_.coloniesBeaconsSetMap[colonyId].insert(cell);
+                    }
+                    continue;
+                }
+
+                // take max useful cell and make path over this cell with beacons
+
+                int intermdiateCell = radiusCellWorthMap.rbegin()->second;
+                std::cerr << "Intermdiate Cell for colony " << colonyId << " with max esimation : " << intermdiateCell << std::endl;
+
+                // make line from nearest colony cell to Intermdiate Cell
+                for (int cell : field_.pathMapVec[nearestColonyCellToBestCell][intermdiateCell])
+                {
+                    field_.coloniesBeaconsSetMap[colonyId].insert(cell);
+                }
+                // and then make line from Intermdiate Cell to Cell with max estimate
+                for (int cell : field_.pathMapVec[intermdiateCell][cellWithMaxEstimate])
+                {
+                    field_.coloniesBeaconsSetMap[colonyId].insert(cell);
+                }
             }
         }
+
+        // std::cerr << "end tryMakeNewLinesInColonies" << std::endl;
     }
 
     void setBeacons()
     {
-        for (int curFriendlyBase : field_.friendlyBases)
+        // map cell -> strength
+        std::map<int, int> totalBeaconsMap;
+        for (const auto& colonyPair : field_.turnColoniesMap)
         {
-            curTurnActions.push_back(
-                std::make_unique<BeaconAction>(curFriendlyBase, 1)
-            );
-        }
+            const int colonyId = colonyPair.first;
 
-        for (int beaconCell : field_.beaconsCellSet)
+            for (int beaconCell : field_.coloniesBeaconsSetMap[colonyId])
+            {
+                totalBeaconsMap[beaconCell] = 
+                    field_.cells[beaconCell].oppAnts > field_.cells[beaconCell].myAnts ? 8 : 4;
+            }
+        }
+        for (const auto& beaconsPair : totalBeaconsMap)
         {
-            curTurnActions.push_back(
-                std::make_unique<BeaconAction>(beaconCell, 1)
-            );
+            curTurnActions.push_back(std::make_unique<BeaconAction>(beaconsPair.first, beaconsPair.second));
         }
     }
 
     void makeActions()
     {
         curTurnActions.clear();
-        field_.beaconsCellSet.clear();
+        field_.coloniesLinesMap.clear();
 
-        saveBeaconsForTargets();
+        saveActualLinesInColonies();
 
-        // для каждой колонии надо "перестроить колонии": изменить конфигурацию маяков внутри колонии   
-        for (int colonyIdx = 0; colonyIdx < field_.turnColoniesMap.size(); colonyIdx++)
-        {
-
-        }
-
-        tryMakeNewBeaconPathForBestCell();
-
-        // checkBeaconPathToBase();
+        tryMakeNewLinesInColonies();
 
         setBeacons();
-
-        // for (const auto& beaconPathPair : field_.beaconsPathMap)
-        // {
-        //     std::cerr << "Beacon path to cell " << beaconPathPair.first << ": [";
-        //     for (int cell : beaconPathPair.second)
-        //     {
-        //         std::cerr << cell << ", ";
-        //     }
-        //     std::cerr << "]\n";
-        // }
 
         printActions();
     }
